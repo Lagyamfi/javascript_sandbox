@@ -110,7 +110,9 @@ Spider.prototype.die = function () {
 
 PlayState = {};
 
-PlayState.init = function () {
+const LEVEL_COUNT = 2;  // to be updated if levels are increased
+
+PlayState.init = function (data) {
     this.game.renderer.renderSession.roundPixels = true;  // to fix blurry glitch when moving hero
     this.keys = this.game.input.keyboard.addKeys({
         left: Phaser.KeyCode.LEFT,
@@ -127,10 +129,14 @@ PlayState.init = function () {
     this.coinPickupCount = 0;
 
     this.hasKey = false;
+
+    this.level = (data.level || 0) % LEVEL_COUNT;
 };
 
 // load game asserts here
 PlayState.preload = function () {
+    this.game.load.json('level:0', 'data/level00.json');
+
     this.game.load.image('background', 'images/background.png');
     this.game.load.json('level:1', 'data/level01.json');
     this.game.load.image('ground', 'images/ground.png');
@@ -162,6 +168,8 @@ PlayState.preload = function () {
 
     this.game.load.spritesheet('door', 'images/door.png', 42, 66);
 
+    this.game.load.spritesheet('icon:key', 'images/key_icon.png', 34, 30);
+
 };
 
 PlayState.create = function () {
@@ -175,7 +183,8 @@ PlayState.create = function () {
     };
 
     this.game.add.image(0, 0, 'background');
-    this._loadLevel(this.game.cache.getJSON('level:1'));
+    //this._loadLevel(this.game.cache.getJSON('level:1'));
+    this._loadLevel(this.game.cache.getJSON(`level:${this.level}`));
     this._createHud();
 
     
@@ -197,6 +206,8 @@ PlayState.update = function () {
     }
 
     this.coinFont.text = `x${this.coinPickupCount}`;
+
+    this.keyIcon.frame = this.hasKey ? 1 : 0;
 }
 
 PlayState._loadLevel = function (data) {
@@ -256,6 +267,13 @@ PlayState._handleCollisions = function () {
     this.game.physics.arcade.collide(this.hero, this.platforms);
     this.game.physics.arcade.overlap(this.hero, this.coins, this._onHeroVsCoin, null, this);
     this.game.physics.arcade.overlap(this.hero, this.spiders, this._onHeroVsEnemy, null, this);
+    this.game.physics.arcade.overlap(this.hero, this.key, this._onHeroVsKey, null, this);
+    this.game.physics.arcade.overlap(this.hero, this.door, this._onHeroVsDoor, 
+        // igonore if there is no key or the player is on air
+        function (hero, door) {
+            return this.hasKey && hero.body.touching.down;
+        }, this);
+
 }
 
 PlayState._spawnCoin = function (coin) {
@@ -294,15 +312,32 @@ PlayState._onHeroVsEnemy = function (hero, enemy) {
     }
     else {// game over -> restart the play
         this.sfx.stomp.play();
-        this.game.state.restart();
+        //this.game.state.restart();
+        this.game.state.restart(true, false, {level: this.level});
     }
 
 }
 
+PlayState._onHeroVsKey = function (hero, key) {
+    this.sfx.key.play();
+    key.kill();
+    this.hasKey= true;
+}
+
+PlayState._onHeroVsDoor = function (hero, door) {
+    this.sfx.door.play();
+    //this.game.state.restart();
+    // TODO: go to the next level instead
+    this.game.state.restart(true, false, {level: this.level + 1});
+}
+
 PlayState._createHud = function () {
+    this.keyIcon = this.game.make.image(0, 19, 'icon:key');
+    this.keyIcon.anchor.set(0, 0.5);
+
     const NUMBERS_STR = '0123456789X ';
     this.coinFont = this.game.add.retroFont('font:numbers', 20, 26, NUMBERS_STR, 6);
-    let coinIcon = this.game.make.image(0, 0, 'icon:coin');
+    let coinIcon = this.game.make.image(this.keyIcon.width + 7 , 0, 'icon:coin');
     let coinScoreImg = this.game.make.image(coinIcon.x + coinIcon.width, coinIcon.height /2 , this.coinFont);
     coinScoreImg.anchor.set(0, 0.5);
 
@@ -310,6 +345,7 @@ PlayState._createHud = function () {
     this.hud.add(coinIcon);
     this.hud.position.set(10, 10);
     this.hud.add(coinScoreImg);
+    this.hud.add(this.keyIcon);
 }
 
 PlayState._spawnDoor = function (x, y) {
@@ -325,9 +361,19 @@ PlayState._spawnKey = function (x, y) {
     this.key.anchor.set(0.5, 0.5);
     this.game.physics.enable(this.key);
     this.key.body.allowGravity = false;
+
+    // add a small 'up & down' animation via a tween
+    this.key.y -= 3;
+    this.game.add.tween(this.key)
+        .to({y: this.key.y + 6}, 800, Phaser.Easing.Sinusoidal.InOut)
+        .yoyo(true)
+        .loop()
+        .start();
 }
+
 window.onload = function () {
     let game = new Phaser.Game(960, 600, Phaser.AUTO, 'game');
     game.state.add('play', PlayState);
-    game.state.start('play');
+    // game.state.start('play');
+    game.state.start('play', true, false, {level: 0});
 };
