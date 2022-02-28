@@ -9,6 +9,9 @@ function Hero(game, x, y) {
     this.animations.add('run', [1, 2], 8, true); // 8fps looped
     this.animations.add('jump', [3]);
     this.animations.add('fall', [4]);
+    this.animations.add('die', [5, 6, 5, 6, 5, 6, 5, 6], 12); // 12 fps no loop
+    // starting animation
+    this.animations.play('stop');
 }
 
 function Spider(game, x, y) {
@@ -32,6 +35,10 @@ Hero.prototype = Object.create(Phaser.Sprite.prototype);
 Hero.prototype.constructor = Hero;
 
 Hero.prototype.move = function (direction) {
+    // guard
+    if (this.isFrozen) {
+        return;
+    }
     const SPEED = 200;
     this.body.velocity.x = direction * SPEED; 
 
@@ -44,24 +51,55 @@ Hero.prototype.move = function (direction) {
 }
 
 Hero.prototype.jump = function () {
-    const JUMP_SPEED = 600;
-    let canJump = this.body.touching.down;
+    const JUMP_SPEED = 400;
+    let canJump = this.body.touching.down && this.alive && !this.isFrozen;
 
-    if (canJump) {
-        this.body.velocity.y =-JUMP_SPEED;
+    if (canJump || this.isBoosting ) {
+        this.body.velocity.y = -JUMP_SPEED;
+        this.isBoosting = true;
     }
 
     return canJump;
 };
+
+Hero.prototype.stopJumpBoost = function () {
+    this.isBoosting = false;
+}
 
 Hero.prototype.bounce = function () {
     const BOUNCE_SPEED = 200;
     this.body.velocity.y = -BOUNCE_SPEED;
 }
 
+Hero.prototype.freeze = function () {
+    this.body.enable = false;
+    this.isFrozen = true;
+}
+
+Hero.prototype.die = function (){
+    this.alive = false;
+    this.body.enable = false;
+
+    this.animations.play('die').onComplete.addOnce(function () {
+        this.kill();
+    }, this);
+}
+
+// returns the animation name that should be playing depending on 
+// current circumstance
 Hero.prototype._getAnimationName = function () {
     let name = 'stop'; // default animation
 
+    // dying
+    if (!this.alive) {
+        name = 'die';
+    }
+
+    // frozen & not dying
+    else if (this.frozen) {
+        name = 'stop';
+    }
+    
     // jumping
     if (this.body.velocity.y < 0) {
         name = 'jump';
@@ -108,37 +146,24 @@ Spider.prototype.die = function () {
     },this);
 }
 
-PlayState = {};
+// ========================================================================================================
+// Loading state
+// ========================================================================================================
 
-const LEVEL_COUNT = 2;  // to be updated if levels are increased
+LoadingState = {};
 
-PlayState.init = function (data) {
-    this.game.renderer.renderSession.roundPixels = true;  // to fix blurry glitch when moving hero
-    this.keys = this.game.input.keyboard.addKeys({
-        left: Phaser.KeyCode.LEFT,
-        right: Phaser.KeyCode.RIGHT,
-        up: Phaser.KeyCode.UP,
-    });
-    this.keys.up.onDown.add(function () {
-        let didJump = this.hero.jump();
-        if (didJump) {
-            this.sfx.jump.play();
-        }
-    }, this);
-
-    this.coinPickupCount = 0;
-
-    this.hasKey = false;
-
-    this.level = (data.level || 0) % LEVEL_COUNT;
+LoadingState.init = function () {
+    // keep crispy-looking pixels
+    this.game.renderer.renderSession.roundPixels = true;
 };
 
 // load game asserts here
-PlayState.preload = function () {
+LoadingState.preload = function () {
     this.game.load.json('level:0', 'data/level00.json');
+    this.game.load.json('level:1', 'data/level01.json');
+
 
     this.game.load.image('background', 'images/background.png');
-    this.game.load.json('level:1', 'data/level01.json');
     this.game.load.image('ground', 'images/ground.png');
     this.game.load.image('grass:8x1', 'images/grass_8x1.png');
     this.game.load.image('grass:6x1', 'images/grass_6x1.png');
@@ -147,11 +172,7 @@ PlayState.preload = function () {
     this.game.load.image('grass:1x1', 'images/grass_1x1.png');
     this.game.load.image('icon:coin', 'images/coin_icon.png');
     this.game.load.image('font:numbers', 'images/numbers.png');
-
-    // this.game.load.image('hero', 'images/hero_stopped.png');
-
     this.game.load.image('invisible-wall', 'images/invisible_wall.png');
-
     this.game.load.image('key', 'images/key.png');
 
     this.game.load.audio('sfx:jump', 'audio/jump.wav');
@@ -159,32 +180,65 @@ PlayState.preload = function () {
     this.game.load.audio('sfx:stomp', 'audio/stomp.wav');
     this.game.load.audio('sfx:key', 'audio/key.wav');
     this.game.load.audio('sfx:door', 'audio/door.wav');
+    this.game.load.audio('bgm', ['audio/bgm.mp3', 'audio/bgm.ogg']);
 
     this.game.load.spritesheet('coin', 'images/coin_animated.png', 22, 22);
-
     this.game.load.spritesheet('spider', 'images/spider.png', 42, 32);
-
     this.game.load.spritesheet('hero', 'images/hero.png', 36, 42);
-
     this.game.load.spritesheet('door', 'images/door.png', 42, 66);
-
     this.game.load.spritesheet('icon:key', 'images/key_icon.png', 34, 30);
+    this.game.load.spritesheet('decoration', 'images/decor.png', 42, 42);
 
+    
 };
 
+LoadingState.create = function () {
+    this.game.state.start('play', true, false, {level: 0});
+}
+
+// ==================================================================================
+// Play State
+// ==================================================================================
+
+PlayState = {};
+
+const LEVEL_COUNT = 2;  // to be updated if levels are increased
+
+PlayState.init = function (data) {
+    //this.game.renderer.renderSession.roundPixels = true;  // to fix blurry glitch when moving hero
+    this.keys = this.game.input.keyboard.addKeys({
+        left: Phaser.KeyCode.LEFT,
+        right: Phaser.KeyCode.RIGHT,
+        up: Phaser.KeyCode.UP,
+    });
+
+    this.coinPickupCount = 0;
+    this.hasKey = false;
+    this.level = (data.level || 0) % LEVEL_COUNT;
+};
+
+
 PlayState.create = function () {
+    // fade in (from black)
+    this.camera.flash('#000000');
+
     // create sound entities
     this.sfx = {
         jump: this.game.add.audio('sfx:jump'),
         coin: this.game.add.audio('sfx:coin'),
         stomp: this.game.add.audio('sfx:stomp'),
         key: this.game.add.audio('sfx:key'),
-        door: this.game.add.audio('sfx: door'),
+        door: this.game.add.audio('sfx:door'),
     };
+    this.bgm = this.game.add.audio('bgm');
+    this.bgm.loopFull();
 
+    // create level entities and decoration
     this.game.add.image(0, 0, 'background');
     //this._loadLevel(this.game.cache.getJSON('level:1'));
     this._loadLevel(this.game.cache.getJSON(`level:${this.level}`));
+
+    // create UI score boards
     this._createHud();
 
     
@@ -193,21 +247,15 @@ PlayState.create = function () {
 
 PlayState.update = function () {
     this._handleCollisions();
-    //this._handleInput();
+    this._handleInput();
 
-    if (this.keys.left.isDown) { // move hero left
-        this.hero.move(-1);
-    }
-    else if (this.keys.right.isDown) { // move hero right
-        this.hero.move(1);
-    }
-    else { // stop
-        this.hero.move(0);
-    }
-
+    // update scoreboards
     this.coinFont.text = `x${this.coinPickupCount}`;
-
     this.keyIcon.frame = this.hasKey ? 1 : 0;
+}
+
+PlayState.shutdown = function () {
+    this.bgm.stop();
 }
 
 PlayState._loadLevel = function (data) {
@@ -227,6 +275,12 @@ PlayState._loadLevel = function (data) {
     // spawn hero and enemies
     this._spawnCharacters({hero: data.hero, spiders: data.spiders});
 
+    // spawn level decorations
+    data.decoration.forEach(function (deco) {
+        this.bgDecoration.add(
+            this.game.add.image(deco.x, deco.y, 'decoration', deco.frame));
+    }, this);
+
     //spawn import objects
     data.coins.forEach(this._spawnCoin, this);
     this._spawnDoor(data.door.x, data.door.y);
@@ -235,6 +289,16 @@ PlayState._loadLevel = function (data) {
     // enable gravity
     const GRAVITY = 1200;
     this.game.physics.arcade.gravity.y = GRAVITY;
+}
+
+PlayState._goToNextLevel = function () {
+    this.camera.fade('#000000');
+    this.camera.onFadeComplete.addOnce(function () {
+        // change to next level
+        this.game.state.restart(true, false, {
+            level: this.level + 1
+        });
+    }, this);
 }
 
 PlayState._spawnPlatform = function (platform) {
@@ -265,9 +329,17 @@ PlayState._handleCollisions = function () {
     this.game.physics.arcade.collide(this.spiders, this.platforms);
     this.game.physics.arcade.collide(this.spiders, this.enemyWalls);
     this.game.physics.arcade.collide(this.hero, this.platforms);
+
+    // hero vs coins (pick up)
     this.game.physics.arcade.overlap(this.hero, this.coins, this._onHeroVsCoin, null, this);
+
+    // collision: hero vs enemies (kill or die)
     this.game.physics.arcade.overlap(this.hero, this.spiders, this._onHeroVsEnemy, null, this);
+
+    // hero vs key (pick up)
     this.game.physics.arcade.overlap(this.hero, this.key, this._onHeroVsKey, null, this);
+
+    // hero vs door (end level)
     this.game.physics.arcade.overlap(this.hero, this.door, this._onHeroVsDoor, 
         // igonore if there is no key or the player is on air
         function (hero, door) {
@@ -276,13 +348,38 @@ PlayState._handleCollisions = function () {
 
 }
 
+PlayState._handleInput = function () {
+
+    if (this.keys.left.isDown) { // move hero left
+        this.hero.move(-1);
+    }
+    else if (this.keys.right.isDown) { // move hero right
+        this.hero.move(1);
+    }
+    else { // stop
+        this.hero.move(0);
+    }
+
+    // handle jump
+    const JUMP_HOLD = 200; // ms
+    if (this.keys.up.downDuration(JUMP_HOLD)) {
+        let didJump = this.hero.jump();
+        if (didJump) { this.sfx.jump.play(); }
+    }
+    else {
+        this.hero.stopJumpBoost();
+    }
+}
+
 PlayState._spawnCoin = function (coin) {
     let sprite = this.coins.create(coin.x, coin.y, 'coin');
     sprite.anchor.set(0.5, 0.5);
 
+    // animations
     sprite.animations.add('rotate', [0, 1, 2, 1], 6, true); // 6fps, looped
     sprite.animations.play('rotate');
 
+    // physics(so we can detech overlap with the hero)
     this.game.physics.enable(sprite);
     sprite.body.allowGravity = false;
 };
@@ -306,17 +403,23 @@ PlayState._spawnEnemyWall = function (x, y, side) {
 
 PlayState._onHeroVsEnemy = function (hero, enemy) {
     if (hero.body.velocity.y > 0) { // kill enemies when hero is falling
-        hero.bounce();
         enemy.die();
+        hero.bounce();
         this.sfx.stomp.play();
     }
-    else {// game over -> restart the play
+    else {// game over -> play dying animation and restart the game
+        hero.die();
         this.sfx.stomp.play();
-        //this.game.state.restart();
-        this.game.state.restart(true, false, {level: this.level});
-    }
+        hero.events.onKilled.addOnce(function () {
+            this.game.state.restart(true, false, {level: this.level});
+        }, this);
 
-}
+        // NOTE: bug in phase in which it modified 'touching' when 
+        // checking for overlaps. This undoes that change so spiders don't
+        // 'bounce' against the hero
+        enemy.body.touching = enemy.body.wasTouching;
+    }
+};
 
 PlayState._onHeroVsKey = function (hero, key) {
     this.sfx.key.play();
@@ -325,10 +428,15 @@ PlayState._onHeroVsKey = function (hero, key) {
 }
 
 PlayState._onHeroVsDoor = function (hero, door) {
+    // 'open' the door by changing its graphic and play a sfx
+    door.frame = 1;
     this.sfx.door.play();
-    //this.game.state.restart();
-    // TODO: go to the next level instead
-    this.game.state.restart(true, false, {level: this.level + 1});
+
+    // play 'enter door' animation and change to the next level when it ends
+    hero.freeze();
+    this.game.add.tween(hero)
+        .to({x: this.door.x, alpha: 0}, 500, null, true)
+        .onComplete.addOnce(this._goToNextLevel, this);
 }
 
 PlayState._createHud = function () {
@@ -355,7 +463,6 @@ PlayState._spawnDoor = function (x, y) {
     this.door.body.allowGravity = false;
 }
 
-
 PlayState._spawnKey = function (x, y) {
     this.key = this.bgDecoration.create(x, y, 'key');
     this.key.anchor.set(0.5, 0.5);
@@ -371,9 +478,15 @@ PlayState._spawnKey = function (x, y) {
         .start();
 }
 
+// ==================================================================================
+// Entry Point 
+// ==================================================================================
+
 window.onload = function () {
     let game = new Phaser.Game(960, 600, Phaser.AUTO, 'game');
     game.state.add('play', PlayState);
     // game.state.start('play');
-    game.state.start('play', true, false, {level: 0});
+    //game.state.start('play', true, false, {level: 0});
+    game.state.add('loading', LoadingState);
+    game.state.start('loading');
 };
